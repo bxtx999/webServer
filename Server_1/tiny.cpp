@@ -6,9 +6,10 @@
 #include <csignal>
 #include <cerrno>
 #include <ctime>
-#include <cstdio>
 #include <cstdlib>
-#include <cstring>
+#include <map>
+#include <string>
+#include <iostream>
 // https://linux.die.net/man/3/inet_ntoa
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -20,6 +21,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
+
 
 #define LISTENQ 1024  // second argument to  listen().
 #define MAXLINE 1024  // max length of a line.
@@ -45,12 +47,8 @@ typedef struct {
     size_t end;
 } http_request;
 
-typedef struct {
-    const char *extension;
-    const char *mime_type;
-} mime_map;
-
-mime_map mime_types [] = {
+// std::map<extension, mime_type>
+const std::map<std::string, std::string> mime_map {
         {".css", "text/css"},
         {".gif", "image/gif"},
         {".htm", "text/html"},
@@ -67,7 +65,7 @@ mime_map mime_types [] = {
         {nullptr, nullptr},
 };
 
-const char *default_mime_type = "text/plain";
+const std::string default_mime_type = "text/plain";
 
 void rio_readinit(rio_t *rp, int fd) {
     rp->rio_fd = fd;
@@ -159,24 +157,30 @@ void format_size(char *buf, struct stat *stat) {}
 
 void handle_directory_request(int out_fd, int dir_fd, char *filename) {}
 
-// todo: use pair or map.
-static const char* get_mime_type(char *filename) {
+static std::string get_mime_type(std::string filename) {
     // Returns a pointer to the last occurrence of character in the C string str.
     // http://www.cplusplus.com/reference/cstring/strrchr/
-    char *dot = strrchr(filename, reinterpret_cast<const int>("."));
-    if (dot) {  // strrchar Locate last occurrence of character in string
-        mime_map *map = mime_types;
-        if (strcmp(map->extension, dot) == 0) {
-            return map->mime_type;
-        }
-        map++;
+    //    char *dot = strrchr(filename, reinterpret_cast<const int>("."));
+    //    if (dot) {  // strrchar Locate last occurrence of character in string
+    //        mime_map *map = mime_types;
+    //        if (strcmp(map->extension, dot) == 0) {
+    //            return map->mime_type;
+    //        }
+    //        map++;
+    //    }
+    //    return default_mime_type;
+    std::string suffixStr = filename.substr(filename.find_last_of('.') + 1);  // 获取后缀
+    auto search = mime_map.find(suffixStr);
+    if (search != mime_map.end()) {
+        return search->second;
+    } else {
+        return default_mime_type;
     }
-    return default_mime_type;
 }
 
 int open_listenfd(int port) {}
 
-void url_decode(char *src, char *dest, int max) {}
+void url_decode(std::string src, std::string dest, int max) {}
 
 void parse_request(int fd, http_request *req) {}
 
@@ -196,7 +200,12 @@ void parse_request(int fd, http_request *req) {}
  *   https://www.gta.ufrj.br/ensino/eel878/sockets/sockaddr_inman.html
  * */
 void log_access(int status, struct sockaddr_in *c_addr, http_request *req) {
-    printf("%s:%d %d - %s\n", inet_ntoa(c_addr->sin_addr), ntohs(c_addr->sin_port), status, req->filename);
+    //    printf("%s:%d %d - %s\n", inet_ntoa(c_addr->sin_addr), ntohs(c_addr->sin_port), status, req->filename);
+    // The inet_ntoa() function converts the Internet host address in, given in network byte order,
+    // to a string in IPv4 dotted-decimal notation. The string is returned in a statically allocated buffer,
+    // which subsequent calls will overwrite.
+    // The ntohs() function converts the unsigned short integer netshort from network byte order to host byte order.
+    std::cout << inet_ntoa(c_addr->sin_addr) << ":" << ntohs(c_addr->sin_port) << " " << status << " - " << req->filename << std::endl;
 }
 
 void client_error(int fd, int status, char *msg, char *longmsg) {}
