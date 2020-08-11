@@ -4,12 +4,13 @@
 
 
 #include <csignal>
-#include <cerrno>
 #include <ctime>
 #include <cstdlib>
 #include <map>
 #include <string>
 #include <iostream>
+#include <vector>
+#include <system_error>
 // https://linux.die.net/man/3/inet_ntoa
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -81,28 +82,18 @@ void rio_readinit(rio_t *rp, int fd) {
  * According to posix standards <sys/types.h>, ssize_t is used for count of bytes or an error indicatio
  * The type ssize_t is capable of storing values at least in the range [-1, SSIZE_MAX]
  * */
-ssize_t writen(int fd, void *usrbuf, size_t n) {
+ssize_t writen(int fd, std::vector<void *> usrbuf, size_t n) {
     size_t nleft = n;
-    ssize_tt nwritten;
-    char *bufp =  usrbuf;
+    ssize_t nwritten;
+    // todo: fix bugs
+    // https://stackoverflow.com/questions/725040/converting-void-to-stdvectorunsigned-char
+    std::vector<char *> bufp = (std::vector<char*>)usrbuf;
 
-    while (nleft > 0) {
-        /*
-         * #include <unistd.h>
-         * ssize_t write(int fd, const void *buf, size_t count);
-         * write() writes up to count bytes from the buffer pointed buf to the file referred to by the file descriptor fd.
-         * https://linux.die.net/man/2/write
-         * */
-        if (nwritten = write(fd, bufp, nleft) <= 0) {
-            /*
-             * Many system calls will report the EINTR error code if a signal occurred while the system call was in progress.
-             * No error actually occurred, it's just reported that way because the system isn't able to resume the system call automatically.
-             * This coding pattern simply retries the system call when this happens, to ignore the interrupt.
-             * For instance, this might happen if the program makes use of alarm() to run some code asynchronously when a timer runs out.
-             * If the timeout occurs while the program is calling write(), we just want to retry the system call (aka read/write, etc).
-             * https://stackoverflow.com/a/41474692/4270398
-             * */
-            if (errno == EINTR) {  // interrupted by sig handler return
+    while (nleft >  0) {
+        try {
+            nwritten = write(fd, bufp, nleft);
+        } catch (const std::system_error& e) {
+            if (e.code() == std::errc::interrupted) {
                 nwritten = 0;
             } else {
                 return -1;
@@ -113,6 +104,38 @@ ssize_t writen(int fd, void *usrbuf, size_t n) {
     }
     return n;
 }
+//ssize_t writen(int fd, void *usrbuf, size_t n) {
+//    size_t nleft = n;
+//    ssize_tt nwritten;
+//    char *bufp =  usrbuf;
+//
+//    while (nleft > 0) {
+        /*
+         * #include <unistd.h>
+         * ssize_t write(int fd, const void *buf, size_t count);
+         * write() writes up to count bytes from the buffer pointed buf to the file referred to by the file descriptor fd.
+         * https://linux.die.net/man/2/write
+         * */
+//        if (nwritten = write(fd, bufp, nleft) <= 0) {
+            /*
+             * Many system calls will report the EINTR error code if a signal occurred while the system call was in progress.
+             * No error actually occurred, it's just reported that way because the system isn't able to resume the system call automatically.
+             * This coding pattern simply retries the system call when this happens, to ignore the interrupt.
+             * For instance, this might happen if the program makes use of alarm() to run some code asynchronously when a timer runs out.
+             * If the timeout occurs while the program is calling write(), we just want to retry the system call (aka read/write, etc).
+             * https://stackoverflow.com/a/41474692/4270398
+             * */
+//            if (errno == std::errc::interrupted) {  // interrupted by sig handler return
+//                nwritten = 0;
+//            } else {
+//                return -1;
+//            }
+//        }
+//        nleft -= nwritten;
+//        bufp += nwritten;
+//    }
+//    return n;
+//}
 
 /*
  * rio_read - This is a wrapper for the Unix read() function that
