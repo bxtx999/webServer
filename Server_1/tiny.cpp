@@ -22,6 +22,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstring>
 
 
 #define LISTENQ 1024  // second argument to  listen().
@@ -48,7 +49,7 @@ typedef struct {
     size_t end;
 } http_request;
 
-// std::map<extension, mime_type>
+// <extension, mime_type>
 const std::map<std::string, std::string> mime_map {
         {".css", "text/css"},
         {".gif", "image/gif"},
@@ -63,10 +64,9 @@ const std::map<std::string, std::string> mime_map {
         {".png", "image/png"},
         {".svg", "image/svg+xml"},
         {".xml", "text/xml"},
-        {nullptr, nullptr},
 };
 
-const std::string default_mime_type = "text/plain";
+std::string const default_mime_type("text/plain");
 
 void rio_readinit(rio_t *rp, int fd) {
     rp->rio_fd = fd;
@@ -82,15 +82,24 @@ void rio_readinit(rio_t *rp, int fd) {
  * According to posix standards <sys/types.h>, ssize_t is used for count of bytes or an error indicatio
  * The type ssize_t is capable of storing values at least in the range [-1, SSIZE_MAX]
  * */
-ssize_t writen(int fd, std::vector<void *> usrbuf, size_t n) {
+ssize_t writen(int fd, void *usrbuf, size_t n) {
     size_t nleft = n;
     ssize_t nwritten;
     // todo: fix bugs
     // https://stackoverflow.com/questions/725040/converting-void-to-stdvectorunsigned-char
-    std::vector<char *> bufp = (std::vector<char*>)usrbuf;
+    // https://stackoverflow.com/a/30693969/4270398
+    char * bufp = static_cast<char *>(usrbuf);
 
     while (nleft >  0) {
         try {
+            /*
+             * Many system calls will report the EINTR error code if a signal occurred while the system call was in progress.
+             * No error actually occurred, it's just reported that way because the system isn't able to resume the system call automatically.
+             * This coding pattern simply retries the system call when this happens, to ignore the interrupt.
+             * For instance, this might happen if the program makes use of alarm() to run some code asynchronously when a timer runs out.
+             * If the timeout occurs while the program is calling write(), we just want to retry the system call (aka read/write, etc).
+             * https://stackoverflow.com/a/41474692/4270398
+             * */
             nwritten = write(fd, bufp, nleft);
         } catch (const std::system_error& e) {
             if (e.code() == std::errc::interrupted) {
@@ -104,38 +113,7 @@ ssize_t writen(int fd, std::vector<void *> usrbuf, size_t n) {
     }
     return n;
 }
-//ssize_t writen(int fd, void *usrbuf, size_t n) {
-//    size_t nleft = n;
-//    ssize_tt nwritten;
-//    char *bufp =  usrbuf;
-//
-//    while (nleft > 0) {
-        /*
-         * #include <unistd.h>
-         * ssize_t write(int fd, const void *buf, size_t count);
-         * write() writes up to count bytes from the buffer pointed buf to the file referred to by the file descriptor fd.
-         * https://linux.die.net/man/2/write
-         * */
-//        if (nwritten = write(fd, bufp, nleft) <= 0) {
-            /*
-             * Many system calls will report the EINTR error code if a signal occurred while the system call was in progress.
-             * No error actually occurred, it's just reported that way because the system isn't able to resume the system call automatically.
-             * This coding pattern simply retries the system call when this happens, to ignore the interrupt.
-             * For instance, this might happen if the program makes use of alarm() to run some code asynchronously when a timer runs out.
-             * If the timeout occurs while the program is calling write(), we just want to retry the system call (aka read/write, etc).
-             * https://stackoverflow.com/a/41474692/4270398
-             * */
-//            if (errno == std::errc::interrupted) {  // interrupted by sig handler return
-//                nwritten = 0;
-//            } else {
-//                return -1;
-//            }
-//        }
-//        nleft -= nwritten;
-//        bufp += nwritten;
-//    }
-//    return n;
-//}
+
 
 /*
  * rio_read - This is a wrapper for the Unix read() function that
@@ -181,18 +159,7 @@ void format_size(char *buf, struct stat *stat) {}
 void handle_directory_request(int out_fd, int dir_fd, char *filename) {}
 
 static std::string get_mime_type(std::string filename) {
-    // Returns a pointer to the last occurrence of character in the C string str.
-    // http://www.cplusplus.com/reference/cstring/strrchr/
-    //    char *dot = strrchr(filename, reinterpret_cast<const int>("."));
-    //    if (dot) {  // strrchar Locate last occurrence of character in string
-    //        mime_map *map = mime_types;
-    //        if (strcmp(map->extension, dot) == 0) {
-    //            return map->mime_type;
-    //        }
-    //        map++;
-    //    }
-    //    return default_mime_type;
-    std::string suffixStr = filename.substr(filename.find_last_of('.') + 1);  // 获取后缀
+    std::string suffixStr = filename.substr(filename.find_last_of('.') + 1);
     auto search = mime_map.find(suffixStr);
     if (search != mime_map.end()) {
         return search->second;
@@ -203,7 +170,8 @@ static std::string get_mime_type(std::string filename) {
 
 int open_listenfd(int port) {}
 
-void url_decode(std::string src, std::string dest, int max) {}
+void url_decode(std::string& src, std::string& dest, int max) {}
+
 
 void parse_request(int fd, http_request *req) {}
 
@@ -238,5 +206,6 @@ void serve_static(int out_fd, int in_fd, http_request *req, size_t total_size) {
 void process(int fd, struct sockaddr_in *clientaddr) {}
 
 int main(int argc, char** argv) {
+    std::cout << get_mime_type("a.pdf") << std::endl;
     return 0;
 }
