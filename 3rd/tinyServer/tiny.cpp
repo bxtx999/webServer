@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#inlcude <iostream>
 #include <map>
 
 #define LISTENQ 1024  /* second argument to listen() */
@@ -96,7 +97,13 @@ void format_size(char *buf, struct stat *stat) {
 void handle_directory_request(int out_fd, int dir_fd, char *filename) {}
 
 static std::string get_mime_type(std::string filename) {
-    
+    std::string suffixStr = filename.substr(filename.find_last_of('.') + 1);
+    auto search = mime_map.find(suffixStr);
+    if (search != mime_map.end()) {
+        return search->second;
+    } else {
+        return default_mime_type;
+    }
 }
 
 int open_listenfd(int prot) {}
@@ -106,8 +113,13 @@ void url_decode(char *src, char *dest, int max) {}
 void parse_request(int fd, http_request *req) {}
 
 void log_access(int status, struct sockaddr_in *c_addr, http_request *req) {
-    printf("%s:%d %d - %s\n", inet_ntoa(c_addr->sin_addr),
-        ntohs(c_addr->sin_port), status, req->filename);
+    // printf("%s:%d %d - %s\n", inet_ntoa(c_addr->sin_addr),
+    //     ntohs(c_addr->sin_port), status, req->filename);
+        // The inet_ntoa() function converts the Internet host address in, given in network byte order,
+    // to a string in IPv4 dotted-decimal notation. The string is returned in a statically allocated buffer,
+    // which subsequent calls will overwrite.
+    // The ntohs() function converts the unsigned short integer netshort from network byte order to host byte order.
+    std::cout << inet_ntoa(c_addr->sin_addr) << ":" << ntohs(c_addr->sin_port) << " " << status << " - " << req->filename << std::endl;
 }
 
 void client_error(int fd, int status, char *msg, char *longmsg) {}
