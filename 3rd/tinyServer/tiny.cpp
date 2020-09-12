@@ -172,11 +172,94 @@ static std::string get_mime_type(std::string filename) {
     }
 }
 
-int open_listenfd(int prot) {}
+int open_listenfd(int port) {
+    int listenfd, optval=1;
+    struct sockaddr_in serveraddr;
 
-void url_decode(char *src, char *dest, int max) {}
+    // Create a socket descriptor.
+    if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        return -1;
+    }
+    
+    // Eliminates "Address already in use" error from bind.
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&optval, sizeof(int)) < 0) {
+        return -1;
+    }
 
-void parse_request(int fd, http_request *req) {}
+    // 6 is TCP's protocol number
+    // enable this, much faster: 4000 req/s -> 17000 req/s
+    if (setsockopt(listenfd, 6, TCP_CORK, (const void*)&optval, sizeof(int)) < 0) {
+        return -1;
+    }
+
+    // Listenfd will be an endpoint for all requests to port
+    // on any IP address for this host.
+    memset(&serveraddr, 0, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serveraddr.sin_port = htons((unsigned short) port);
+    if (bind(listenfd, (SA *)&serveraddr, sizeof(serveraddr)) < 0) {
+        return -1;
+    }
+
+    // Make it a listening socket ready to accept connection requests
+    if (listen(listenfd, LISTENQ) < 0) {
+        return -1;
+    }
+    return listenfd;
+}
+
+void url_decode(char *src, char *dest, int max) {
+    char *p = src;
+    char code[3] = {0};
+    while(*p && --max) {
+        if (*p == '%') {
+            memcpy(code, ++p, 2);
+            *dest++ = static_cast<char>(strtoul(code, NULL, 16));
+            p += 2;
+        } else {
+            *dest++ = *p++;
+        }
+    }
+    *dest = '\0';
+}
+
+void parse_request(int fd, http_request *req) {
+    rio_t rio;
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE];
+    req->offset = 0;
+    req->end = 0;
+
+    rio_readinitb(&rio, fd);
+    rio_readlineb(&rio, buf, MAXLINE);
+    sscanf(buf, "%s %s", method, uri);
+    // read all
+    while (buf[0] != '\n' && buf[1] != '\n') {
+        rio_readlineb(&rio, buf, MAXLINE);
+        if (buf[0] == 'R' && buf[1] == 'a'&& buf[2] == 'n') {
+            sscanf(buf, "Range: bytes=%lu-%lu", &req->offset, &req->end);
+            if (req->end != 0) {
+                req->end++;
+            }
+        }
+    }
+    char *filename = uri;
+    if (uri[0] == '/') {
+        filename = uri + 1;
+        int length = strlen(filename);
+        if (length == 0) {
+            filename = "."
+        } else {
+            for (int i = 0; i < length; i++) {
+                if (filename[i] == '?')  {
+                    filename[i] = '\0';
+                    break;
+                }
+            }
+        }
+    }
+    url_decode(filename, req->filename, MAXLINE);
+}
 
 void log_access(int status, struct sockaddr_in *c_addr, http_request *req) {
     // printf("%s:%d %d - %s\n", inet_ntoa(c_addr->sin_addr),
@@ -188,12 +271,131 @@ void log_access(int status, struct sockaddr_in *c_addr, http_request *req) {
     std::cout << inet_ntoa(c_addr->sin_addr) << ":" << ntohs(c_addr->sin_port) << " " << status << " - " << req->filename << std::endl;
 }
 
-void client_error(int fd, int status, char *msg, char *longmsg) {}
+void client_error(int fd, int status, char *msg, char *longmsg) {
+    char buf[MAXLINE];
+    sprintf(buf, "HTTP/1.1 %d %s\r\n", status, msg);
+    sprintf(buf + strlen(buf), "Content-length: %lu\r\n\r\n", strlen(longmsg));
+    sprintf(buf + strlen(buf), "%s", longmsg);
+    writen(fd, buf, strlen(buf));
+}
 
-void serve_static(int out_fd, int in_fd, http_request *req, size_t total_size) {}
+void serve_static(int out_fd, int in_fd, http_request *req, size_t total_size) {
+    char buf[256];
+    if (req->offset > 0) {
+        sprintf(buf, "HTTP/1.1 206 Partial\r\n");
+        sprintf(buf + strlen(buf), "Content-Range: bytes %lu-%lu/%lu\r\n", req->offset, req->end, total_size);
+    } else {
+        sprintf(buf, "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\n");;
+    }
 
-void process(int fd, struct sockadr_in *clientaddr) {}
+    sprintf(buf + strlen(buf), "Cache-Control: no-cache\r\n");
+    sprintf(buf + strlen(buf), "Content-length: %lu\r\n", req->end, req->offset);
+    sprintf(buf + strlen(buf), "Content-type: %s\r\n\r\n", get_mime_type(req->filename));
+
+    writen(out_fd, buf, strlen(buf));
+    off_t offset = req->offset;
+    while(offset < req->end) {
+        if (sendfile(out_fd, in_fd, &offset, req->end - req->offset) <= 0) {
+            break;
+        }
+        printf("offset: %d \n\n", offset);
+        close(out_fd);
+        break;
+    }
+}
+
+void process(int fd, struct sockaddr_in *clientaddr) {
+    printf("accept request, fd is %d, pid is %d\n", fd, getpid());
+
+    http_request req;
+    parse_request(fd, &req);
+
+    struct stat sbuf;
+    int status = 200, ffd = open(req.filename, O_RDONLY, 0);
+    if (ffd <= 0) {
+        status = 404;
+        char *msg = "File Not Found.";
+        client_error(fd, status, "Not Found", msg);
+    } else {
+        fstat(ffd, &sbuf);
+        if (S_ISREG(sbuf.st_mode)) {
+            if (req.end == 0) {
+                req.end = sbuf.st_size;
+            }
+            if (req.offset > 0) {
+                status = 206;
+            }
+            serve_static(fd, ffd, &req, sbuf.st_size);
+        } else  if (S_ISDIR(sbuf.st_mode)) {
+            status = 200;
+            handle_directory_request(fd, ffd, req.filename);
+        } else {
+            status = 400;
+            char *msg = "'Unknow Error";
+            client_error(fd, status, "Error", msg);
+        }
+        close(ffd);
+    }
+    log_access(status, clientaddr, &req);
+}
 
 int main(int argc, char** argv) {
+    struct sockaddr_in clientaddr;
+    int default_port = 9999, listenfd, connfd;
+    char buf[256];
+    char *path = getcwd(buf, 256);
+    socklen_t clientlen = sizeof clientaddr;
+
+    if(argc == 2) {
+        if(argv[1][0] >= '0' && argv[1][0] <= '9') {
+            default_port = atoi(argv[1]);
+        } else {
+            path = argv[1];
+            if(chdir(argv[1]) != 0) {
+                perror(argv[1]);
+                exit(1);
+            }
+        }
+    } else if (argc == 3) {
+        default_port = atoi(argv[2]);
+        path = argv[1];
+        if(chdir(argv[1]) != 0) {
+            perror(argv[1]);
+            exit(1);
+        }
+    }
+
+    listenfd = open_listenfd(default_port);
+    if (listenfd > 0) {
+        printf("listen on port %d, fd is %d\n", default_port, listenfd);
+    } else {
+        perror("ERROR");
+        exit(listenfd);
+    }
+    // Ignore SIGPIPE signal, so if browser cancels the request, it
+    // won't kill the whole process.
+    signal(SIGPIPE, SIG_IGN);
+
+    for(int i = 0; i < 10; i++) {
+        int pid = fork();
+        if (pid == 0) {         //  child
+            while(1){
+                connfd = accept(listenfd, (SA *)&clientaddr, &clientlen);
+                process(connfd, &clientaddr);
+                close(connfd);
+            }
+        } else if (pid > 0) {   //  parent
+            printf("child pid is %d\n", pid);
+        } else {
+            perror("fork");
+        }
+    }
+
+    while( true ){
+        connfd = accept(listenfd, (SA *)&clientaddr, &clientlen);
+        process(connfd, &clientaddr);
+        close(connfd);
+    }
+
     return 0;
 }
