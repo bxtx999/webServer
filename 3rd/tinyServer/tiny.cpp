@@ -248,7 +248,7 @@ void parse_request(int fd, http_request *req) {
         filename = uri + 1;
         int length = strlen(filename);
         if (length == 0) {
-            filename = "."
+            filename = ".";
         } else {
             for (int i = 0; i < length; i++) {
                 if (filename[i] == '?')  {
